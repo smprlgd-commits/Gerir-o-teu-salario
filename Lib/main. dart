@@ -1,0 +1,243 @@
+import 'dart:convert';
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:fl_chart/fl_chart.dart';
+
+void main() => runApp(GerirSalarioApp());
+
+class Despesa {
+  String categoria; double valor; String data;
+  Despesa({required this.categoria, required this.valor, required this.data});
+  Map<String, dynamic> toJson() => {'categoria': categoria, 'valor': valor, 'data': data};
+  factory Despesa.fromJson(Map<String, dynamic> j) => Despesa(categoria: j['categoria'], valor: (j['valor'] as num).toDouble(), data: j['data']);
+}
+
+class GerirSalarioApp extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Gerir o Teu Salário Mensal',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(primaryColor: Color(0xFF0A1931), scaffoldBackgroundColor: Color(0xFF0A1931)),
+      home: HomeScreen(),
+    );
+  }
+}
+
+final navy = Color(0xFF0A1931);
+final green = Color(0xFF00A651);
+final cardColor = Color(0xFF16264A);
+
+class HomeScreen extends StatefulWidget {
+  @override
+  _HomeScreenState createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  int _index = 0;
+  double salario = 0;
+  double metaPoupanca = 50000;
+  double poupado = 0;
+  List<Despesa> despesas = [];
+  bool carregando = true;
+
+  @override
+  void initState() { super.initState(); _carregarDados(); }
+
+  Future<void> _carregarDados() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      salario = prefs.getDouble('salario') ?? 0;
+      metaPoupanca = prefs.getDouble('meta') ?? 50000;
+      poupado = prefs.getDouble('poupado') ?? 0;
+      String? jsonStr = prefs.getString('despesas');
+      if (jsonStr != null) {
+        List list = json.decode(jsonStr);
+        despesas = list.map((e) => Despesa.fromJson(e)).toList();
+      }
+      carregando = false;
+    });
+  }
+
+  Future<void> _guardarDados() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('salario', salario);
+    await prefs.setDouble('meta', metaPoupanca);
+    await prefs.setDouble('poupado', poupado);
+    await prefs.setString('despesas', json.encode(despesas.map((e) => e.toJson()).toList()));
+  }
+
+  double get totalGasto => despesas.fold(0, (s, d) => s + d.valor);
+  double get restante => salario - totalGasto;
+
+  void _definirSalario() {
+    TextEditingController c = TextEditingController(text: salario > 0 ? salario.toStringAsFixed(0) : '');
+    showDialog(context: context, builder: (_) => AlertDialog(
+      backgroundColor: cardColor,
+      title: Text('Qual é o teu salário?', style: TextStyle(color: Colors.white)),
+      content: TextField(controller: c, keyboardType: TextInputType.number, style: TextStyle(color: Colors.white), decoration: InputDecoration(hintText: 'Ex: 250000 Kz', hintStyle: TextStyle(color: Colors.white38))),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: Text('Cancelar', style: TextStyle(color: Colors.white54))),
+        ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: green), onPressed: () { setState(() { salario = double.tryParse(c.text) ?? salario; }); _guardarDados(); Navigator.pop(context); }, child: Text('GUARDAR')),
+      ],
+    ));
+  }
+
+  void _adicionarDespesa(String cat, double valor) async {
+    setState(() { despesas.add(Despesa(categoria: cat, valor: valor, data: DateTime.now().toString().substring(0,10))); });
+    await _guardarDados();
+    setState(() => _index = 0);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Guardado: ${valor.toStringAsFixed(0)} Kz em $cat')));
+  }
+
+  void _adicionarPoupanca(double valor) async {
+    setState(() { poupado += valor; });
+    await _guardarDados();
+    if (poupado >= metaPoupanca) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('🎉 PARABÉNS! Atingiste a tua meta!')));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (carregando) return Scaffold(backgroundColor: navy, body: Center(child: CircularProgressIndicator(color: green)));
+    if (salario == 0) {
+      return Scaffold(backgroundColor: navy, body: Padding(padding: EdgeInsets.all(24), child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+        Text('👋 Bem-vindo!', style: TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold)),
+        SizedBox(height: 12),
+        Text('Vamos começar a gerir o teu salário mensal.', textAlign: TextAlign.center, style: TextStyle(color: Colors.white70)),
+        SizedBox(height: 24),
+        SizedBox(width: double.infinity, height: 55, child: ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: green, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))), onPressed: _definirSalario, child: Text('DEFINIR O MEU SALÁRIO', style: TextStyle(fontWeight: FontWeight.bold)))),
+      ])));
+    }
+    return Scaffold(
+      backgroundColor: navy,
+      appBar: AppBar(backgroundColor: navy, elevation: 0, title: Text('Gerir o Teu Salário Mensal', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)), actions: [IconButton(icon: Icon(Icons.edit), onPressed: _definirSalario)]),
+      body: _index == 0 ? Dashboard(salario: salario, gasto: totalGasto, restante: restante, despesas: despesas) : _index == 1 ? AdicionarDespesa(onGuardar: _adicionarDespesa) : _index == 2 ? Relatorio(despesas: despesas, salario: salario) : PoupancaScreen(meta: metaPoupanca, poupado: poupado, onAdicionar: _adicionarPoupanca, onMudarMeta: (v){ setState(()=> metaPoupanca=v); _guardarDados(); }),
+      bottomNavigationBar: BottomNavigationBar(backgroundColor: cardColor, selectedItemColor: green, unselectedItemColor: Colors.white54, currentIndex: _index, onTap: (i) => setState(() => _index = i), type: BottomNavigationBarType.fixed, items: [
+        BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Início'),
+        BottomNavigationBarItem(icon: Icon(Icons.add_circle, size: 30), label: 'Adicionar'),
+        BottomNavigationBarItem(icon: Icon(Icons.pie_chart), label: 'Relatório'),
+        BottomNavigationBarItem(icon: Icon(Icons.savings), label: 'Poupança'),
+      ]),
+    );
+  }
+}
+
+class Dashboard extends StatelessWidget {
+  final double salario, gasto, restante; final List<Despesa> despesas;
+  Dashboard({required this.salario, required this.gasto, required this.restante, required this.despesas});
+  @override
+  Widget build(BuildContext context) {
+    return ListView(padding: EdgeInsets.all(16), children: [
+      Text('SALDO RESTANTE', style: TextStyle(color: Colors.white54)),
+      Text('${restante.toStringAsFixed(0)} Kz', style: TextStyle(color: restante < 0 ? Colors.redAccent : Colors.white, fontSize: 32, fontWeight: FontWeight.bold)),
+      Text('Salário: ${salario.toStringAsFixed(0)} Kz  •  Gasto: ${gasto.toStringAsFixed(0)} Kz', style: TextStyle(color: Colors.white70)),
+      SizedBox(height: 20),
+      Text('A tua divisão 60 / 25 / 15', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+      SizedBox(height: 12),
+      _barra('Essencial - 60%', (gasto/salario).clamp(0,1), '${(salario*0.6).toStringAsFixed(0)} Kz limite'),
+      _barra('Vida - 25%', 0.4, '${(salario*0.25).toStringAsFixed(0)} Kz limite'),
+      _barra('Poupança - 15%', 0.25, '${(salario*0.15).toStringAsFixed(0)} Kz limite'),
+      SizedBox(height: 16),
+      Text('Últimas despesas', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+      ...despesas.reversed.take(5).map((d) => ListTile(leading: CircleAvatar(backgroundColor: green, child: Icon(Icons.money, color: Colors.white)), title: Text(d.categoria, style: TextStyle(color: Colors.white)), subtitle: Text(d.data, style: TextStyle(color: Colors.white54)), trailing: Text('-${d.valor.toStringAsFixed(0)} Kz', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)))).toList(),
+      if (despesas.isEmpty) Padding(padding: EdgeInsets.only(top: 12), child: Text('Ainda não tens despesas. Clica em + para adicionar.', style: TextStyle(color: Colors.white54))),
+    ]);
+  }
+  Widget _barra(String t, double v, String d) => Padding(padding: EdgeInsets.only(bottom: 14), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [Text(t, style: TextStyle(color: Colors.white)), Text(d, style: TextStyle(color: Colors.white54, fontSize: 12))]), SizedBox(height: 6), ClipRRect(borderRadius: BorderRadius.circular(10), child: LinearProgressIndicator(value: v, minHeight: 10, backgroundColor: Colors.white12, valueColor: AlwaysStoppedAnimation(green)))]));
+}
+
+class AdicionarDespesa extends StatefulWidget {
+  final Function(String, double) onGuardar; AdicionarDespesa({required this.onGuardar});
+  @override
+  _AdicionarDespesaState createState() => _AdicionarDespesaState();
+}
+class _AdicionarDespesaState extends State<AdicionarDespesa> {
+  String categoria = 'Alimentação'; TextEditingController valorCtrl = TextEditingController();
+  @override
+  Widget build(BuildContext context) {
+    return Padding(padding: EdgeInsets.all(20), child: Column(children: [
+      Text('Quanto gastaste?', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+      SizedBox(height: 16),
+      TextField(controller: valorCtrl, keyboardType: TextInputType.number, style: TextStyle(color: Colors.white, fontSize: 28), decoration: InputDecoration(hintText: '0 Kz', hintStyle: TextStyle(color: Colors.white38), filled: true, fillColor: cardColor, border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none))),
+      SizedBox(height: 20),
+      Wrap(spacing: 10, children: ['Renda','Alimentação','Transporte','Saúde','Lazer'].map((c) => ChoiceChip(label: Text(c), selected: c==categoria, selectedColor: green, backgroundColor: cardColor, labelStyle: TextStyle(color: Colors.white), onSelected: (_) => setState(() => categoria = c))).toList()),
+      Spacer(),
+      SizedBox(width: double.infinity, height: 55, child: ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: green, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))), onPressed: () { double v = double.tryParse(valorCtrl.text) ?? 0; if(v>0) widget.onGuardar(categoria, v); }, child: Text('GUARDAR DESPESA', style: TextStyle(fontWeight: FontWeight.bold)))),
+    ]));
+  }
+}
+
+class Relatorio extends StatelessWidget {
+  final List<Despesa> despesas; final double salario;
+  Relatorio({required this.despesas, required this.salario});
+  @override
+  Widget build(BuildContext context) {
+    Map<String,double> porCat = {};
+    for(var d in despesas) porCat[d.categoria] = (porCat[d.categoria] ?? 0) + d.valor;
+    double total = porCat.values.fold(0, (a,b) => a+b);
+    Map<String, Color> cores = {'Renda': Color(0xFF00A651),'Alimentação': Color(0xFFFFC107),'Transporte': Color(0xFF2196F3),'Saúde': Color(0xFFE91E63),'Lazer': Color(0xFF9C27B0)};
+    return ListView(padding: EdgeInsets.all(16), children: [
+      AlertasWidget(salario: salario, totalGasto: total, porCat: porCat),
+      SizedBox(height: 10),
+      Text('Onde foi o teu dinheiro?', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+      SizedBox(height: 12),
+      if (despesas.isEmpty) Container(height: 180, decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(16)), child: Center(child: Text('Sem dados ainda.\nAdiciona a tua primeira despesa.', textAlign: TextAlign.center, style: TextStyle(color: Colors.white54))))
+      else Container(height: 220, padding: EdgeInsets.all(12), decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(16)), child: PieChart(PieChartData(sectionsSpace: 2, centerSpaceRadius: 50, sections: porCat.entries.map((e){ double pct = total>0 ? (e.value/total*100):0; return PieChartSectionData(value: e.value, title: '${pct.toStringAsFixed(0)}%', color: cores[e.key] ?? Colors.grey, radius: 55, titleStyle: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)); }).toList()))),
+      SizedBox(height: 16),
+      ...porCat.entries.map((e) => Padding(padding: EdgeInsets.only(bottom: 8), child: Row(children: [Container(width: 12, height: 12, decoration: BoxDecoration(color: cores[e.key] ?? Colors.grey, borderRadius: BorderRadius.circular(4))), SizedBox(width: 8), Expanded(child: Text(e.key, style: TextStyle(color: Colors.white))), Text('${e.value.toStringAsFixed(0)} Kz', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold))]))).toList(),
+    ]);
+  }
+}
+
+class AlertasWidget extends StatelessWidget {
+  final double salario; final double totalGasto; final Map<String,double> porCat;
+  AlertasWidget({required this.salario, required this.totalGasto, required this.porCat});
+  @override
+  Widget build(BuildContext context) {
+    List<Widget> alertas = [];
+    double pct = salario>0 ? totalGasto/salario : 0;
+    if (pct >= 0.8) alertas.add(_alerta(Icons.warning, Colors.redAccent, 'Perigo! Já gastaste ${(pct*100).toStringAsFixed(0)}% do teu salário.'));
+    else if (pct >= 0.5) alertas.add(_alerta(Icons.info, Colors.amber, 'Atenção: Já gastaste ${(pct*100).toStringAsFixed(0)}% do salário.'));
+    if ((porCat['Alimentação'] ?? 0) > salario*0.3) alertas.add(_alerta(Icons.fastfood, Colors.orange, 'Alimentação está alta! Mais de 30% só em comida.'));
+    if (alertas.isEmpty && totalGasto>0) alertas.add(_alerta(Icons.check_circle, green, 'Estás no bom caminho! Abaixo de 50% do salário.'));
+    if (alertas.isEmpty) return SizedBox.shrink();
+    return Column(children: alertas);
+  }
+  Widget _alerta(IconData icone, Color cor, String texto) => Container(margin: EdgeInsets.only(bottom: 10), padding: EdgeInsets.all(14), decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(16), border: Border.all(color: cor.withOpacity(0.4))), child: Row(children: [Icon(icone, color: cor), SizedBox(width: 10), Expanded(child: Text(texto, style: TextStyle(color: Colors.white)))]));
+}
+
+class PoupancaScreen extends StatefulWidget {
+  final double meta; final double poupado; final Function(double) onAdicionar; final Function(double) onMudarMeta;
+  PoupancaScreen({required this.meta, required this.poupado, required this.onAdicionar, required this.onMudarMeta});
+  @override
+  _PoupancaScreenState createState() => _PoupancaScreenState();
+}
+class _PoupancaScreenState extends State<PoupancaScreen> {
+  TextEditingController valorCtrl = TextEditingController(); TextEditingController metaCtrl = TextEditingController();
+  @override
+  Widget build(BuildContext context) {
+    double pct = widget.meta>0 ? (widget.poupado/widget.meta).clamp(0,1):0;
+    return Padding(padding: EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text('🎯 A tua Meta de Poupança', style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+      SizedBox(height: 16),
+      Container(padding: EdgeInsets.all(20), decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(20)), child: Column(children: [
+        Text('${widget.poupado.toStringAsFixed(0)} Kz', style: TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold)),
+        Text('de ${widget.meta.toStringAsFixed(0)} Kz  •  ${(pct*100).toStringAsFixed(0)}%', style: TextStyle(color: Colors.white70)),
+        SizedBox(height: 14),
+        ClipRRect(borderRadius: BorderRadius.circular(10), child: LinearProgressIndicator(value: pct, minHeight: 14, backgroundColor: Colors.white12, valueColor: AlwaysStoppedAnimation(green))),
+        SizedBox(height: 12),
+        Text(pct>=1 ? '🎉 Meta atingida!' : 'Faltam ${(widget.meta-widget.poupado).toStringAsFixed(0)} Kz', style: TextStyle(color: Colors.white)),
+      ])),
+      SizedBox(height: 20),
+      Text('Adicionar poupança', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+      SizedBox(height: 8),
+      TextField(controller: valorCtrl, keyboardType: TextInputType.number, style: TextStyle(color: Colors.white), decoration: InputDecoration(hintText: 'Ex: 10000 Kz', hintStyle: TextStyle(color: Colors.white38), filled: true, fillColor: cardColor, border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none))),
+      SizedBox(height: 12),
+      SizedBox(width: double.infinity, height: 50, child: ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: green, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))), onPressed: (){ double v = double.tryParse(valorCtrl.text) ?? 0; if(v>0){ widget.onAdicionar(v); valorCtrl.clear(); } }, child: Text('POUPAR AGORA'))),
+      SizedBox(height: 20),
+      Text('Mudar meta', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+      SizedBox(height: 8),
+      Row(children: [Expanded(child: TextField(controller: metaCtrl, keyboardType: TextInputType.number, style: TextStyle(color: Colors.white), decoration: InputDecoration(hintText: 'Nova meta Kz', hintStyle: TextStyle(color: Colors.white38), filled: true, fillColor: cardColor, border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none)))), SizedBox(width: 10), ElevatedButton(style: ElevatedButton.styleFrom(backgroundColor: Colors.white, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))), onPressed: (){ double v = double.tryParse(metaCtrl.text) ?? 0; if(v>0) widget.onMudarMeta(v); }, child: Text('MUDAR', style: TextStyle(color: navy)))]),
+    ]));
+  }
+}
